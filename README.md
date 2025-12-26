@@ -1,2 +1,2 @@
-# computer-vision-robotic-arm-color-sorting
-Robotic arm controlled using computer vision for real-time color-based object sorting
+Project Title
+Computer Vision Controlled Robotic Arm for Color Sorting
