@@ -1,3 +1,3 @@
 # Project Images / videos 
-i have attached the working video of the project 
+i have uploaded the working video of the project 
 
