@@ -1,0 +1,41 @@
+#include <Arduino.h>
+#include <Servo.h>
+
+Servo myservo;
+String cmd = "";
+int servoPin = 13; // change to your pin
+int leftAngle = 0;
+int centerAngle = 90;
+int rightAngle = 180;
+
+void setup() {
+  Serial.begin(115200);
+  myservo.attach(servoPin);
+  myservo.write(centerAngle);
+  Serial.println("ESP32 ready");
+}
+
+void loop() {
+  if (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') {
+      cmd.trim();
+      Serial.println("Got: " + cmd);
+
+      if (cmd.startsWith("RED_") || cmd.startsWith("BLUE_")) {
+        if (cmd.endsWith("_LEFT")) {
+          myservo.write(leftAngle);
+        } else if (cmd.endsWith("_RIGHT")) {
+          myservo.write(rightAngle);
+        } else if (cmd.endsWith("_CENTER")) {
+          myservo.write(centerAngle);
+        }
+      } else if (cmd == "NO_TARGET") {
+        // optional: move to safe position or do nothing
+      }
+      cmd = "";
+    } else {
+      cmd += c;
+    }
+  }
+}
