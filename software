@@ -1,1 +1,128 @@
+import cv2
+import numpy as np
+import serial
+import time
 
+# ============== CONFIG ==============
+SERIAL_PORT = "/dev/cu.SLAB_USBtoUART"  # <- change to your port
+BAUDRATE = 115200
+MIN_AREA = 1000      # ignore small blobs
+FRAME_WIDTH = 640
+CENTER_TOLERANCE = 80   # px around center considered "center"
+# ====================================
+
+# Serial setup (safe - will continue without serial if port missing)
+try:
+    esp = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=1)
+    time.sleep(2)  # wait for ESP32 reset
+    print("Connected to ESP32 on", SERIAL_PORT)
+except Exception as e:
+    print("Warning: Could not open serial port:", e)
+    esp = None
+
+cap = cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
+
+def send_cmd(cmd: str):
+    print("CMD ->", cmd)
+    if esp:
+        esp.write((cmd + "\n").encode('utf-8'))
+
+def process_frame(frame):
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+    # Red range (two ranges because red wraps)
+    lower_red1 = np.array([0, 120, 70])
+    upper_red1 = np.array([10, 255, 255])
+    lower_red2 = np.array([170, 120, 70])
+    upper_red2 = np.array([180, 255, 255])
+
+    # Blue range (tweak if needed)
+    lower_blue = np.array([100, 150, 50])
+    upper_blue = np.array([140, 255, 255])
+
+    mask_red = cv2.inRange(hsv, lower_red1, upper_red1) | cv2.inRange(hsv, lower_red2, upper_red2)
+    mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+
+    return mask_red, mask_blue
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("Frame capture failed")
+        break
+
+    h, w = frame.shape[:2]
+    cx_center = w // 2
+
+    mask_r, mask_b = process_frame(frame)
+
+    # Find contours for red first, then blue
+    contours_r, _ = cv2.findContours(mask_r, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours_b, _ = cv2.findContours(mask_b, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    chosen_color = None
+    centroid = None
+
+    def find_biggest(contours):
+        if not contours:
+            return None
+        c = max(contours, key=cv2.contourArea)
+        if cv2.contourArea(c) < MIN_AREA:
+            return None
+        M = cv2.moments(c)
+        if M["m00"] == 0:
+            return None
+        cx = int(M["m10"] / M["m00"])
+        cy = int(M["m01"] / M["m00"])
+        return (cx, cy, int(cv2.contourArea(c)), c)
+
+    r = find_biggest(contours_r)
+    b = find_biggest(contours_b)
+
+    # Priority: red over blue if both present (change if needed)
+    if r:
+        centroid = (r[0], r[1])
+        chosen_color = "RED"
+        cv2.drawContours(frame, [r[3]], -1, (0,0,255), 2)
+    elif b:
+        centroid = (b[0], b[1])
+        chosen_color = "BLUE"
+        cv2.drawContours(frame, [b[3]], -1, (255,0,0), 2)
+
+    # Determine left/center/right
+    action = "STOP"
+    if centroid:
+        cx, cy = centroid
+        cv2.circle(frame, (cx, cy), 6, (0,255,0), -1)
+        cv2.line(frame, (cx_center, 0), (cx_center, h), (255,255,0), 1)
+
+        if cx < cx_center - CENTER_TOLERANCE:
+            action = "LEFT"
+        elif cx > cx_center + CENTER_TOLERANCE:
+            action = "RIGHT"
+        else:
+            action = "CENTER"
+
+        send_cmd(f"{chosen_color}_{action}")
+    else:
+        send_cmd("NO_TARGET")
+
+    # Show status
+    status_text = f"Target: {chosen_color or 'None'} | Action: {action}"
+    cv2.putText(frame, status_text, (10,30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2)
+
+    cv2.imshow("Frame", frame)
+    cv2.imshow("Mask Red", mask_r)
+    cv2.imshow("Mask Blue", mask_b)
+
+    key = cv2.waitKey(1) & 0xFF
+    if key == ord('q'):
+        break
+    if key == ord('p'):  # pause
+        cv2.waitKey(0)
+
+cap.release()
+cv2.destroyAllWindows()
+if esp:
+    esp.close()
